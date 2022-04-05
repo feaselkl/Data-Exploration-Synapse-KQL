@@ -1,0 +1,23 @@
+EXPLAIN
+SELECT * FROM inspections;
+
+EXPLAIN
+SELECT TOP(10)
+    *
+FROM inspections
+WHERE
+    DATE_ BETWEEN '2018-01-01' AND '2018-01-10';
+
+EXPLAIN
+SELECT TOP(10)
+    i.HSISID,
+    r.NAME,
+    r.CITY,
+    i.SCORE,
+    i.INSPECTOR,
+    i.DATE_ AS InspectionDate
+FROM inspections i
+    INNER JOIN restaurants r
+        ON CAST(i.HSISID AS NVARCHAR) = CAST(r.HSISID AS NVARCHAR)
+WHERE
+    i.DATE_ BETWEEN '2018-01-01' AND '2018-01-10';

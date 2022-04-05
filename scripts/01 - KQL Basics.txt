@@ -1,0 +1,299 @@
+// Basic query
+inspections
+| take 10
+
+// Where:  limit based on conditions
+inspections
+| where SCORE < 90
+| take 10
+
+// Search:  look in columns for a particular value
+restaurants
+| search "Tropical Picken Chicken"
+| take 10
+
+// Search:  like
+restaurants
+| search "Tropical Pick*"
+| take 10
+
+// Search:  ends with
+restaurants
+| search * endswith "Chicken"
+| take 10
+
+// Search: starts with
+restaurants
+| search * startswith "Alpaca"
+| take 10
+
+// Search:  combine
+restaurants
+| search * startswith "Tropical"
+| search * endswith "Chicken"
+| take 10
+
+// Where: time in the past
+inspections
+| where SCORE < 90 and DATE_ <= ago(1000d)
+| take 10
+
+// Count:  number of rows
+inspections
+| where SCORE < 90 and DATE_ <= ago(1000d)
+| count
+
+// Summarize:  perform an aggregation
+// Sort:  order by
+inspections
+| summarize count() by SCORE
+| sort by SCORE desc
+
+// Binning
+inspections
+| summarize count() by bin(SCORE, 5)
+| sort by SCORE desc
+
+// Percentiles
+inspections
+| where SCORE > 0
+| summarize (Min, Q1, Median, Q3, P95, P99, Max) =
+    percentiles(SCORE, 0, 25, 50, 75, 95, 99, 100)
+
+// Review accuracy with dcount
+// Accuracies:
+// 0 = 1.6% error
+// 1 = 0.8% error.  Default value.
+// 2 = 0.4% error
+// 3 = 0.28% error
+inspections
+| summarize
+    Fastest = dcount(INSPECTIONKEY, 0),
+    Normal = dcount(INSPECTIONKEY, 1),
+    MoreAccurate = dcount(INSPECTIONKEY, 2),
+    MostAccurate = dcount(INSPECTIONKEY, 3),
+    Actual = count() by INSPECTOR
+
+
+// Join records together
+inspection_violations
+| take 10
+| extend HSISID = tostring(HSISID)
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+
+// Join and summarize
+inspections
+| join kind=leftouter inspection_violations on INSPECTIONKEY
+| summarize NumberOfViolations = count(), TotalPoints = sum(POINTVALUE) by INSPECTIONKEY
+
+// See all of the columns together
+inspections
+| join kind=leftouter inspection_violations on INSPECTIONKEY
+| summarize NumberOfViolations = count(), TotalPoints = sum(POINTVALUE) by INSPECTIONKEY, tostring(HSISID), SCORE, DATE_, TYPE
+
+// Add in restaurants and get critical violations
+inspections
+| extend HSISID = tostring(HSISID)
+| join kind=leftouter inspection_violations on INSPECTIONKEY
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| summarize
+    NumberOfViolations = count(),
+    TotalPoints = sum(POINTVALUE),
+    NumberOfCriticalViolations = sumif(1, CRITICAL == "Yes")
+    by INSPECTIONKEY, HSISID, SCORE, DATE_, TYPE, NAME, CITY, FACILITYTYPE
+
+// Facility types?
+restaurants
+| distinct FACILITYTYPE
+
+// How clean are these? Focus on restaurants with scores
+inspections
+| extend HSISID = tostring(HSISID)
+| where SCORE > 0
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| summarize
+    NumberOfEntries = count(),
+    AvgScore = avg(SCORE)
+    by FACILITYTYPE
+
+
+// Limit to restaurants
+inspections
+| extend HSISID = tostring(HSISID)
+| where SCORE > 0
+| join kind=leftouter inspection_violations on INSPECTIONKEY
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| where FACILITYTYPE in ("Restaurant", "Food Stand", "Mobile Food Units")
+| summarize
+    NumberOfViolations = count(),
+    TotalPoints = sum(POINTVALUE),
+    NumberOfCriticalViolations = sumif(1, CRITICAL == "Yes")
+    by INSPECTIONKEY, HSISID, SCORE, DATE_, TYPE, NAME, CITY, FACILITYTYPE
+
+// Bucketing inspection data by month and facility type
+inspections
+| extend HSISID = tostring(HSISID)
+| where SCORE > 0
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| extend MonthOfInspection = startofmonth(DATE_)
+| summarize
+    NumberOfEntries = count(),
+    AvgScore = avg(SCORE)
+    by FACILITYTYPE, MonthOfInspection
+| where NumberOfEntries > 50
+
+
+// Bad months:  facility type and average score < 95
+inspections
+| extend HSISID = tostring(HSISID)
+| where SCORE > 0
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| extend MonthOfInspection = startofmonth(DATE_)
+| summarize
+    NumberOfEntries = count(),
+    AvgScore = avg(SCORE)
+    by FACILITYTYPE, MonthOfInspection
+| where NumberOfEntries > 50 and AvgScore between (90 .. 95)
+
+// Not between:  find the edges
+inspections
+| extend HSISID = tostring(HSISID)
+| where SCORE > 0
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| extend MonthOfInspection = startofmonth(DATE_)
+| summarize
+    NumberOfEntries = count(),
+    AvgScore = avg(SCORE)
+    by FACILITYTYPE, MonthOfInspection
+| where NumberOfEntries > 30 and AvgScore !between (95.0 .. 98.6)
+
+// Make it look nicer
+inspections
+| extend HSISID = tostring(HSISID)
+| where SCORE > 0
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| extend MonthOfInspection = startofmonth(DATE_)
+| summarize
+    NumberOfEntries = count(),
+    AvgScore = avg(SCORE)
+    by FACILITYTYPE, MonthOfInspection
+| where NumberOfEntries > 30 and AvgScore !between (95.0 .. 98.6)
+| project
+    FacilityType = FACILITYTYPE,
+    MonthOfInspection = format_datetime(MonthOfInspection, "yyyy-MM-dd"),
+    NumberOfEntries,
+    AvgScore = round(AvgScore, 2)
+
+// What's the largest number of violations by facility type? Include all details
+inspections
+| extend HSISID = tostring(HSISID)
+| join kind=leftouter inspection_violations on INSPECTIONKEY
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| summarize
+    NumberOfViolations = count(),
+    TotalPoints = sum(POINTVALUE),
+    NumberOfCriticalViolations = sumif(1, CRITICAL == "Yes")
+    by INSPECTIONKEY, HSISID, SCORE, DATE_, TYPE, NAME, CITY, FACILITYTYPE
+| summarize 
+    arg_max(NumberOfViolations, *) by FACILITYTYPE
+
+// What's the lowest score by facility type?
+inspections
+| extend HSISID = tostring(HSISID)
+| where SCORE > 0
+| join kind=leftouter inspection_violations on INSPECTIONKEY
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| summarize
+    NumberOfViolations = count(),
+    TotalPoints = sum(POINTVALUE),
+    NumberOfCriticalViolations = sumif(1, CRITICAL == "Yes")
+    by INSPECTIONKEY, HSISID, SCORE, DATE_, TYPE, NAME, CITY, FACILITYTYPE
+| summarize 
+    arg_min(SCORE, *) by FACILITYTYPE
+
+// Note that the lowest restaurant didn't have any violations data.
+// What about among restaurants with violation data?
+inspections
+| extend HSISID = tostring(HSISID)
+| where SCORE > 0
+| join kind=inner inspection_violations on INSPECTIONKEY
+| join kind=inner (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| summarize
+    NumberOfViolations = count(),
+    TotalPoints = sum(POINTVALUE),
+    NumberOfCriticalViolations = sumif(1, CRITICAL == "Yes")
+    by INSPECTIONKEY, HSISID, SCORE, DATE_, TYPE, NAME, CITY, FACILITYTYPE
+| summarize 
+    arg_min(SCORE, *) by FACILITYTYPE
+
+// Let's see the problems
+inspection_violations
+| where INSPECTIONKEY == '4092015521_7/22/2019'
+| sort by CRITICAL desc
+
+// They had a really bad day and things went from abominable to mediocre
+inspections
+| where HSISID == 4092015521 and SCORE > 0
+| sort by DATE_ desc
+
+// We can also use variables in KQL
+let RestaurantID = 4092015521;
+inspections
+| where HSISID == RestaurantID and SCORE > 0
+| sort by DATE_ desc
+
+// Use prev() and next() to act like LAG() and LEAD()
+let RestaurantID = 4092015521;
+inspections
+| where HSISID == RestaurantID and SCORE > 0
+| sort by DATE_ asc
+| extend
+    PriorScore = prev(SCORE),
+    NextScore = next(SCORE),
+    TwoScoresFromNow = next(SCORE, 2)
+| project
+    PriorScore,
+    SCORE,
+    NextScore,
+    TwoScoresFromNow,
+    DATE_,
+    INSPECTOR
+
+// Who are our most prolific inspectors from 2018 forward?
+inspections
+| where DATE_ >= todatetime('2018-01-01') and SCORE > 0
+| top-nested 5 of INSPECTOR with others = "All Others" by NumberOfInspections = count()
+
+// Top by city and inspector -- need to join to restaurants
+inspections
+| where DATE_ >= todatetime('2018-01-01') and SCORE > 0
+| extend HSISID = tostring(HSISID)
+| join kind=leftouter (restaurants | extend HSISID = tostring(HSISID)) on HSISID
+| top-nested 5 of INSPECTOR with others = "All Others" by NumberOfInspections = count(),
+  top-nested 3 of CITY with others = "Other Towns" by InspectionsInCity = count()
+| sort by NumberOfInspections desc, INSPECTOR asc, InspectionsInCity desc
+
+// Number of points lost on critical inspection elements
+inspection_violations
+| where INSPECTDATE >= todatetime('2018-04-01') and INSPECTDATE < todatetime('2018-04-05')
+| summarize
+    NumberOfViolations = count(),
+    NumberOfCriticalViolations = countif(CRITICAL == "Yes"),
+    TotalPointsLost = sum(POINTVALUE),
+    PointsLostFromCritical = sumif(POINTVALUE, CRITICAL == "Yes") by tostring(HSISID)
+
+// Use materialize() to save a dataset. Really useful for multiple calls
+// Suppose this query was really expensive
+inspections
+| where DATE_ >= todatetime('2018-01-01') and SCORE > 0
+| top-nested 5 of INSPECTOR with others = "All Others" by NumberOfInspections = count()
+
+// We can materialize it and re-use it:
+let inspectors = materialize(
+    inspections
+    | where DATE_ >= todatetime('2018-01-01') and SCORE > 0
+    | top-nested 5 of INSPECTOR with others = "All Others" by NumberOfInspections = count()
+);
+inspectors;
+inspectors | union inspectors;
+// As a bonus, note the two queries:  we can see multiple result sets here.

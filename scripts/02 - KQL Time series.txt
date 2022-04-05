@@ -1,0 +1,165 @@
+// "Proto"-time series:  charting
+// Remember when we did this?
+let RestaurantID = 4092015521;
+inspections
+| where HSISID == RestaurantID and SCORE > 0
+| sort by DATE_ asc
+| extend
+    PriorScore = prev(SCORE),
+    NextScore = next(SCORE),
+    TwoScoresFromNow = next(SCORE, 2)
+| project
+    PriorScore,
+    SCORE,
+    NextScore,
+    TwoScoresFromNow,
+    DATE_,
+    INSPECTOR
+
+// We can use render to make a chart
+let RestaurantID = 4092015521;
+inspections
+| where HSISID == RestaurantID and SCORE > 0
+| sort by DATE_ asc
+| extend
+    PriorScore = prev(SCORE),
+    NextScore = next(SCORE),
+    TwoScoresFromNow = next(SCORE, 2)
+| project
+    DATE_,
+    SCORE
+| render timechart
+
+// Another pre-req to understand:  ranges
+range numericSeries from 1 to 8 step 1
+
+range numericSeries2 from 10 to 9000 step 50
+
+range lastWeek from ago(7d) to now() step 1d
+
+// But we probably want the *start* of each day as our values
+// This also lets us do the math and figure out that we're really getting 8 days!
+range lastWeek from ago(7d) to now() step 1d
+| project BeginningOfDay = startofday(lastWeek)
+
+
+// Now that we have the pre-reqs away, let's make a time series!
+// Our goal is to see how many inspections each inspector does per day over a 10-day period
+inspections
+| where DATE_ >= todatetime('2021-08-10') and DATE_ <= todatetime('2021-08-19')
+| make-series count() default=0
+    on DATE_ in range (todatetime('2021-08-10'), todatetime('2021-08-19'), 1d) by INSPECTOR
+| project
+    Inspector = INSPECTOR,
+    NumberOfInspections = count_,
+    DateOfInspection = DATE_
+
+// We have two arrays that we created...but we can have more!
+inspections
+| where DATE_ >= todatetime('2021-08-10') and DATE_ <= todatetime('2021-08-19')
+| make-series
+    count() default=0,
+    round(avg(SCORE),1) default=0
+    on DATE_ in range (todatetime('2021-08-10'), todatetime('2021-08-19'), 1d) by INSPECTOR
+| project
+    Inspector = INSPECTOR,
+    NumberOfInspections = count_,
+    AverageInspectionScore = avg_SCORE,
+    DateOfInspection = DATE_
+
+// What we can do with this:
+
+// See that pros don't work on weekends.
+inspections
+| where DATE_ >= todatetime('2021-08-10') and DATE_ <= todatetime('2021-08-19')
+| make-series
+    count() default=0,
+    round(avg(SCORE),1) default=0
+    on DATE_ in range (todatetime('2021-08-10'), todatetime('2021-08-19'), 1d) by INSPECTOR
+| project
+    Inspector = INSPECTOR,
+    NumberOfInspections = count_,
+    AverageInspectionScore = avg_SCORE,
+    DateOfInspection = DATE_
+| render timechart
+
+// See basic statistics--extending to a longer timeframe
+inspections
+| where DATE_ >= todatetime('2021-06-10') and DATE_ <= todatetime('2021-08-19')
+| make-series
+    count() default=0,
+    round(avg(SCORE),1) default=0
+    on DATE_ in range (todatetime('2021-06-10'), todatetime('2021-08-19'), 1d) by INSPECTOR
+| project
+    Inspector = INSPECTOR,
+    NumberOfInspections = count_,
+    AverageInspectionScore = avg_SCORE,
+    DateOfInspection = DATE_
+| extend InspectionScoreStats = series_stats_dynamic(AverageInspectionScore)
+
+// That's not easy to read! Fortunately, KQL expands JSON objects natively!
+inspections
+| where DATE_ >= todatetime('2021-06-10') and DATE_ <= todatetime('2021-08-19')
+| make-series
+    count() default=0,
+    round(avg(SCORE),1) default=0
+    on DATE_ in range (todatetime('2021-06-10'), todatetime('2021-08-19'), 1d) by INSPECTOR
+| project
+    Inspector = INSPECTOR,
+    NumberOfInspections = count_,
+    AverageInspectionScore = avg_SCORE,
+    DateOfInspection = DATE_
+| extend InspectionScoreStats = series_stats_dynamic(AverageInspectionScore)
+| project 
+    Inspector,
+    NumberOfInspections,
+    AverageInspectionScore,
+    DateOfInspection,
+    InspectionScoreStats.min,
+    InspectionScoreStats.min_idx,
+    InspectionScoreStats.max,
+    InspectionScoreStats.max_idx,
+    InspectionScoreStats.avg,
+    InspectionScoreStats.stdev,
+    InspectionScoreStats.variance,
+    InspectionScoreStats.sum,
+    InspectionScoreStats.len
+
+// Do we have any outliers?
+// A score above 1.5 is considered high.
+inspections
+| where DATE_ >= todatetime('2021-06-10') and DATE_ <= todatetime('2021-08-19')
+| make-series
+    count() default=0,
+    round(avg(SCORE),1) default=0
+    on DATE_ in range (todatetime('2021-06-10'), todatetime('2021-08-19'), 1d) by INSPECTOR
+| project
+    Inspector = INSPECTOR,
+    NumberOfInspections = count_,
+    AverageInspectionScore = avg_SCORE,
+    DateOfInspection = DATE_
+| extend Outliers = series_outliers(NumberOfInspections)
+| mvexpand DateOfInspection, NumberOfInspections, Outliers to typeof(double)
+| top 25 by Outliers desc
+
+// Moving average number of inspections by day
+// This involves creating a user-defined function
+// series_fir() = Finite Impulse Response, used in communications theory
+let series_moving_avg_fl = (y_series:dynamic, n:int, center:bool=false)
+{
+    series_fir(y_series, repeat(1, n), true, center)
+};
+inspections
+| where DATE_ >= todatetime('2021-06-10') and DATE_ <= todatetime('2021-08-19')
+| make-series
+    count() default=0,
+    round(avg(SCORE),1) default=0
+    on DATE_ in range (todatetime('2021-06-10'), todatetime('2021-08-19'), 1d) by INSPECTOR
+| project
+    Inspector = INSPECTOR,
+    NumberOfInspections = count_,
+    AverageInspectionScore = avg_SCORE,
+    DateOfInspection = DATE_
+| extend 
+    MovingAverage = series_moving_avg_fl(NumberOfInspections, 5, false),
+    CenteredMovingAverage = series_moving_avg_fl(NumberOfInspections, 5, true)
